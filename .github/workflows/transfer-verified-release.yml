@@ -1,0 +1,55 @@
+name: Transfer verified Windows release
+run-name: Transfer AI Text Assistant 0.2.0 installer
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  transfer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download public installer and verify SHA-256
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, html, http.cookiejar, os, urllib.parse, urllib.request
+          from html.parser import HTMLParser
+          from pathlib import Path
+          expected='b7cc76b07c532eda581bbb3f2bcf820d7b53f248dcfe1b8f75b400c729145957'
+          size=201809776
+          url='https://drive.usercontent.google.com/download?id=1tsbFjuCt8_fXPyzDZyI51EXsiT5c1ZgF&export=download&confirm=t'
+          opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+          opener.addheaders=[('User-Agent','Mozilla/5.0')]
+          response=opener.open(url,timeout=60)
+          if 'text/html' in response.headers.get('Content-Type',''):
+              class Form(HTMLParser):
+                  def __init__(self):super().__init__();self.action=None;self.fields={}
+                  def handle_starttag(self,tag,attrs):
+                      d=dict(attrs)
+                      if tag=='form' and 'download' in d.get('action',''):self.action=d.get('action')
+                      if tag=='input' and d.get('name'):self.fields[d['name']]=d.get('value','')
+              form=Form();form.feed(response.read().decode('utf-8'))
+              if not form.action:raise RuntimeError('Public download form not available')
+              action=urllib.parse.urljoin(url,form.action)
+              if urllib.parse.urlsplit(action).hostname not in ['drive.usercontent.google.com','drive.google.com']:raise RuntimeError('Unexpected download form host')
+              response=opener.open(action+'?'+urllib.parse.urlencode(form.fields),timeout=60)
+              if 'text/html' in response.headers.get('Content-Type',''):raise RuntimeError('Download did not return the installer')
+          Path('artifacts').mkdir()
+          file=Path('artifacts/AI-Text-Assistant-0.2.0-Setup.exe')
+          hasher=hashlib.sha256();count=0
+          with file.open('wb') as dest:
+              while True:
+                  block=response.read(4*1024*1024)
+                  if not block:break
+                  count+=len(block)
+                  if count>size:raise RuntimeError('Download exceeds verified size')
+                  hasher.update(block);dest.write(block)
+          if count!=size or hasher.hexdigest()!=expected:raise RuntimeError('Downloaded installer does not match the verified local installer')
+          print('Installer SHA-256 and byte count verified:',hasher.hexdigest(),count)
+          PY
+      - name: Upload verified installer to the unpublished release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: fasterate/Text-Assistant
+        run: gh release upload v0.2.0 artifacts/AI-Text-Assistant-0.2.0-Setup.exe
